@@ -1,0 +1,56 @@
+name: Build Windows app
+
+on:
+  workflow_dispatch:        # Actions tab -> "Build Windows app" -> Run workflow
+  push:
+    tags: ["v*"]            # git tag v1.0 && git push --tags  -> also publishes a Release
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python packages
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Download Bengali / Hindi / English OCR data
+        run: python download_tessdata.py
+
+      - name: Install Tesseract and stage it for bundling
+        shell: pwsh
+        run: |
+          choco install tesseract --no-progress -y
+          robocopy "C:\Program Files\Tesseract-OCR" tesseract /E /XD tessdata
+          if ($LASTEXITCODE -lt 8) { $global:LASTEXITCODE = 0 }
+          if (-not (Test-Path tesseract\tesseract.exe)) { throw "tesseract.exe was not staged" }
+
+      - name: Build app
+        shell: pwsh
+        run: >
+          pyinstaller --noconfirm --windowed --name PDFtoWord
+          --collect-all fitz --collect-all pymupdf --collect-data docx
+          --add-data "tessdata;tessdata" --add-data "tesseract;tesseract"
+          app.py
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path dist\PDFtoWord -DestinationPath PDFtoWord-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PDFtoWord-windows
+          path: PDFtoWord-windows.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: PDFtoWord-windows.zip
